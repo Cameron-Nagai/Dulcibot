@@ -3,15 +3,25 @@
 #include <WiFiClient.h>
 #include <WiFiUdp.h>
 #include <ESP_WiFiManager.h>  
+#include <SPI.h>
+#include <Ethernet.h>
+#include <EthernetUdp.h>
+#include "local_config.h"  // <--- Change settings for YOUR network here.
 #include "AppleMidi.h"
 // How many boards do you have chained?
 #define NUM_TLC5974 1
-#define usingWifi 1
+#define usingWifi 0
+#define usingEthernet 1
 #define data   2
 #define clock   22
 #define latch   21
-#define oe  -1  // set to -1 to not use the enable pin (its optional)\
-set
+#define oe  -1  // set to -1 to not use the enable pin (its optional)
+
+const int NTP_PACKET_SIZE = 48;
+byte packetBuffer[NTP_PACKET_SIZE];  // Buffer for both incoming and outgoing packets.
+
+EthernetUDP Udp;
+ 
 const int resolution = 8;   // 8 bit pwm resolution (0-255)
 const int freq = 5000;      // PWM Frequency
 const int pwmChannel1 = 0;
@@ -48,28 +58,119 @@ void OnAppleMidiNoteOff(byte channel, byte note, byte velocity);
 
 bool solenoidsOn[] = {false, false, false, false, false, false, false, false};
 
-
-
 Adafruit_TLC5947 tlc = Adafruit_TLC5947(NUM_TLC5974, clock, data, latch);
+
+void WizReset() {
+    Serial.print("Resetting Wiz W5500 Ethernet Board...  ");
+    pinMode(RESET_P, OUTPUT);
+    digitalWrite(RESET_P, HIGH);
+    delay(250);
+    digitalWrite(RESET_P, LOW);
+    delay(50);
+    digitalWrite(RESET_P, HIGH);
+    delay(350);
+    Serial.println("Done.");
+}
+
+void prt_hwval(uint8_t refval) {
+    switch (refval) {
+    case 0:
+        Serial.println("No hardware detected.");
+        break;
+    case 1:
+        Serial.println("WizNet W5100 detected.");
+        break;
+    case 2:
+        Serial.println("WizNet W5200 detected.");
+        break;
+    case 3:
+        Serial.println("WizNet W5500 detected.");
+        break;
+    default:
+        Serial.println
+            ("UNKNOWN - Update espnow_gw.ino to match Ethernet.h");
+    }
+}
+
+void prt_ethval(uint8_t refval) {
+    switch (refval) {
+    case 0:
+        Serial.println("Uknown status.");
+        break;
+    case 1:
+        Serial.println("Link flagged as UP.");
+        break;
+    case 2:
+        Serial.println("Link flagged as DOWN. Check cable connection.");
+        break;
+    default:
+        Serial.println
+            ("UNKNOWN - Update espnow_gw.ino to match Ethernet.h");
+    }
+}
 
 void setup() {
   Serial.begin(115200);
 
+    if (usingEthernet) {
+    Ethernet.init(5);           // GPIO5 on the ESP32.
+    WizReset();
+    Serial.println("Starting ETHERNET connection...");
+    Ethernet.begin(eth_MAC, eth_IP, eth_DNS, eth_GW, eth_MASK);
+
+    delay(200);
+
+    Serial.print("Ethernet IP is: ");
+    Serial.println(Ethernet.localIP());
+
+    /*
+     * Sanity checks for W5500 and cable connection.
+     */
+    Serial.print("Checking connection.");
+    bool rdy_flag = false;
+    for (uint8_t i = 0; i <= 20; i++) {
+        if ((Ethernet.hardwareStatus() == EthernetNoHardware)
+            || (Ethernet.linkStatus() == LinkOFF)) {
+            Serial.print(".");
+            rdy_flag = false;
+            delay(80);
+        } else {
+            rdy_flag = true;
+            break;
+        }
+    }
+    if (rdy_flag == false) {
+        Serial.println
+            ("\n\r\tHardware fault, or cable problem... cannot continue.");
+        Serial.print("Hardware Status: ");
+        prt_hwval(Ethernet.hardwareStatus());
+        Serial.print("   Cable Status: ");
+        prt_ethval(Ethernet.linkStatus());
+        while (true) {
+            delay(10);          // Halt.
+        }
+    } else {
+        Serial.println(" OK");
+    }
+
+    Udp.begin(localPort);
+    }
+    
   ledcSetup(0, freq, resolution);   //Configures PWM Channels for LEDs (1 different pwm channel per Sol)
   ledcSetup(1, freq, resolution);  
   ledcSetup(2, freq, resolution);  
-  ledcSetup(3, freq, resolution); 
-  ledcSetup(4, freq, resolution);  
-  ledcSetup(5, freq, resolution);  
-  ledcSetup(6, freq, resolution); 
+//  ledcSetup(3, freq, resolution); 
+  ledcSetup(3, freq, resolution);  
+//  ledcSetup(4, freq, resolution);  
+//  ledcSetup(6, freq, resolution); 
 
   ledcAttachPin(32, 0);         //Assigns pins to pwm channels
   ledcAttachPin(33, 1);
   ledcAttachPin(17, 2);
-  ledcAttachPin(18, 3);
-  ledcAttachPin(4, 4);         
-  ledcAttachPin(26, 5);
-  ledcAttachPin(23, 6);
+//  ledcAttachPin(18, 3);
+  ledcAttachPin(4, 3);         
+//  ledcAttachPin(26, 4);
+//  ledcAttachPin(23, 6);
   
   tlc.begin();
  
@@ -80,7 +181,7 @@ void setup() {
   }
 if (usingWifi) {
   wifiSetup();
-}
+
   Serial.print(F("Getting IP address..."));
 
 
@@ -97,7 +198,8 @@ if (usingWifi) {
   Serial.println();
   Serial.print(F("IP address is "));
   Serial.println(WiFi.localIP());
-
+  }
+  
   Serial.println(F("OK, now make sure you an rtpMIDI session that is Enabled"));
   Serial.print(F("Add device named Arduino with Host/Port "));
   Serial.print(WiFi.localIP());
@@ -136,7 +238,7 @@ void loop() {
 //}
 
     
-  for (int i=0; i<8; i++) {
+  for (int i=0; i<4; i++) {
     if (solenoidsOn[i] == true) {
       ledcWrite (i, 255);
       Serial.println("HIGH");
