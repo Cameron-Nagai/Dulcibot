@@ -6,7 +6,7 @@
 #include "AppleMidi.h"
 // How many boards do you have chained?
 #define NUM_TLC5974 1
-
+#define usingWifi 1
 #define data   2
 #define clock   22
 #define latch   21
@@ -78,9 +78,9 @@ void setup() {
     pinMode(oe, OUTPUT);
     digitalWrite(oe, LOW);
   }
-
+if (usingWifi) {
   wifiSetup();
-
+}
   Serial.print(F("Getting IP address..."));
 
 
